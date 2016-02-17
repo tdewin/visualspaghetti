@@ -1,0 +1,27 @@
+body p{
+	font-family:arial,verdana;
+	font-size: 14px;
+	color: 333333;
+}
+h1 {
+	font-family:arial,verdana;
+	font-size: 30px;
+}
+#TOC li {
+	list-style-type: square;
+	font-family:arial,verdana;
+	font-size: 30px;
+}
+a:hover,  a:visited, a:active, a:link, a {
+	color:#333;
+}
+
+code {
+	font-family:arial,verdana;
+	background-color:#333;
+	color:#fff;
+	padding: 5px 5px 5px 5px;
+	margin: 3px 0px 3px 0px;
+	display: block;
+	font-size: 14px;
+}
