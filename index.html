@@ -50,17 +50,22 @@
 <li><a href="#backups">Backups</a></li>
 <li><a href="#replicas">Replica's</a></li>
 <li><a href="#how-to-discover">How to discover</a></li>
+<li><a href="#faq">FAQ</a></li>
 </ul>
 </div>
 <h1 id="get-started">Get Started</h1>
 <p>The snapin for veeam is called the &quot;veeampssnapin&quot;. Load it before any script. You need to be local administrator to run it <code>asnp veeampssnapin</code></p>
 <h1 id="connecting-to-a-server">Connecting to a server</h1>
-<p>A server is called a &quot;vbrserver&quot; to differentiate from regular servers</p>
+<p>A server is called a &quot;vbrserver&quot; to differentiate from regular servers. Connecting does not have to be done if you are running on localhost itself</p>
 <div class="figure">
 <img src="img/connect.png" />
 
 </div>
-<p>Connect <code>connect-vbrserver -server localhost -user john -password doe</code> Disconnect <code>disconnect-vbrserver -server localhost -user john -password doe</code></p>
+<p>Connect <code>connect-vbrserver -server localhost -user john -password doe</code> Disconnect <code>disconnect-vbrserver</code></p>
+<p>Here is a simple example getting all the jobs with last run time</p>
+<pre><code>connect-vbrserver -server localhost 
+get-vbrjob | % { write-host (&quot;{0,-20} {1}&quot; -f $_.name,$_.FindLastSession().Endtime) }
+disconnect-vbrserver</code></pre>
 <h1 id="jobs">Jobs</h1>
 <p>Jobs are literally the things that are scheduled to run and produce backups, replica's, etc.</p>
 <div class="figure">
@@ -76,6 +81,7 @@
 <p><code>get-vbrjob | ? { $_.jobtype -match &quot;Backup&quot; }</code></p>
 <p>or get all replica jobs <code>get-vbrjob | ? { $_.jobtype -match &quot;Replica&quot; }</code></p>
 <h1 id="backups">Backups</h1>
+<h2 id="general-view">General View</h2>
 <p>Backups are the result of a job running or multiple times. It is a collection of all backup files. If they are not located under &quot;imported&quot; node, it means they are mapped to a Job</p>
 <div class="figure">
 <img src="img/main.png" />
@@ -87,7 +93,7 @@
 <img src="img/primbackup.png" />
 
 </div>
-<p><code>get-vbrbackup | ? { $_.JobType -eq &quot;Backup&quot; }</code></p>
+<p><code>get-vbrbackup | ? { $_.JobType -match &quot;^(Endpoint)?Backup$&quot; }</code></p>
 <p>All possible types can be listed by using <code>[Veeam.Backup.Model.EDbJobType] | gm -Static -MemberType property</code></p>
 <p>Most common are:</p>
 <ul>
@@ -96,17 +102,82 @@
 <li>Replica</li>
 <li>EndpointBackup</li>
 </ul>
-<p>So let's assume there is one backup job stored in $backup <code>$backup = @(get-vbrbackup)[0]</code></p>
-<p>The individual backups files are stored in &quot;storages&quot; <code>$backup.GetAllStorages()</code></p>
-<p>The stats is a property of a storage. To get a similar result as shown below, you can go over the storages as followed</p>
-<pre class="powershell"><code>$storages = $backup.GetAllStorages()  | Sort-Object -Property creationtime -Descending
-foreach ($storage in $storages) {
-    $stats = $storage.Stats
-    $filepath = $storage.FilePath
-    $time = $storage.CreationTime
+<h2 id="side-panel">Side Panel</h2>
+<div class="figure">
+<img src="img/joboverview.png" />
 
-    write-host (&quot;{0,5} {1,5} {2,5} {3,5} {4} {5} &quot; -f [int]($stats.DataSize/1MB),$stats.DedupRatio,$stats.CompressRatio,[int]($stats.BackupSize/1MB), $time,$filepath)
-} </code></pre>
+</div>
+<p>Let's reproduce the image. First, let look at a backup object <code>$backup = @(get-vbrbackup)[0]</code></p>
+<p>To find out all VMs in the backup, you can query it's objects <code>$backup.GetObjects()</code></p>
+<p>To find out all restore points with VMs, you can use GetOibs (Probably stands for &quot;Object in Backup&quot; or &quot;Orange is Black&quot;, your guess is as good as mine) <code>$backup.GetOibs()</code></p>
+<p>You could then count the amount of points per VM</p>
+<pre><code>$oibs = $backup.GetOibs()
+$vms = $backup.GetObjects()
+
+foreach ($vm in $vms) {
+    $relatedobs = @($oibs | ? { $_.ObjectId -eq $vm.Id })
+    Write-Host (&quot;{0} {1}&quot; -f $vm.Name,$relatedobs.Count)
+}</code></pre>
+<p>Or you use the summary method GetObjectOibsAll()</p>
+<pre><code>foreach ($vmoib in $backup.GetObjectOibsAll()) {
+    Write-Host (&quot;{0} {1}&quot; -f $vmoib.Name,$vmoib.CountOfValidOibs)
+}</code></pre>
+<p>So lets make a table with the info we know now</p>
+<pre><code>$backups = get-vbrbackup | ? { $_.JobType -match &quot;^(Endpoint)?Backup$&quot; }
+$table = @()
+foreach ($backup in $backups) {
+ $objects = $backup.GetObjectOibsAll()
+ foreach ($object in $objects) {
+     $table += New-Object -TypeName psobject -Property @{
+        BackupName=$backup.Name;
+        ObjectName=$object.Name;
+        ObjectCount=$object.CountOfValidOibs;
+        ObjectCreationTime=$object.CreationTime
+     }
+ }
+ 
+}
+$table | Sort-Object -Property &quot;BackupName&quot; | select BackupName,ObjectName,ObjectCount,ObjectCreationTime</code></pre>
+<h2 id="backup-specific-properties">Backup specific properties</h2>
+<p>You get the following view when you select and individual backup, right click it and select properties</p>
+<div class="figure">
+<img src="img/deeppoints.png" />
+
+</div>
+<p>Let's reproduce the image in parts. First, let select a certain backup <code>$backup = get-vbrbackup -Name &quot;Linux&quot;</code></p>
+<p>The individual backups &quot;files&quot; are stored in &quot;storages&quot; <code>$backup.GetAllStorages()</code></p>
+<p>So reproducing this first table is quite easy</p>
+<pre><code>$backup = get-vbrbackup -Name &quot;Linux&quot;
+
+$storages = $backup.GetAllStorages()
+$table = @()
+foreach ($storage in $storages) {
+    
+     $table += New-Object -TypeName psobject -Property @{
+        Name=$storage.FilePath;
+        DataSize=$storage.Stats.DataSize;
+        BackupSize=$storage.Stats.BackupSize;
+        Deduplication=[math]::round(100/$storage.stats.DedupRatio,2);
+        Compression=[math]::round(100/$storage.Stats.CompressRatio,2);
+        Date=$storage.CreationTime;
+     }
+}
+$table | Sort-Object -property Date -Descending  | select Name,DataSize,BackupSize,Deduplication,Compression,Date | ft</code></pre>
+<p>The second part is the restore points. To get the restore points, you actually have a cmdlet (get-vbrrestorepoint). Funny enough, it returns Oibs and it is not the same as GetPoints() on the backup object <code>$restorepoints = Get-VBRRestorePoint -Backup $backup</code></p>
+<pre><code>$backup = get-vbrbackup -Name &quot;Linux&quot;
+
+$restorepoints = Get-VBRRestorePoint -Backup $backup
+$table = @()
+foreach ($rp in $restorepoints) {
+     $table += New-Object -TypeName psobject -Property @{
+        Type=$rp.Algorithm;
+        Point=$rp.PointId;
+        Date=$rp.CreationTime;
+        VMName=$rp.VmName;
+        OriginalSize=$rp.ApproxSize;
+     }
+}
+$table | Sort-Object -property Date -Descending | select VMName,OriginalSize,Type,Date,Point | ft</code></pre>
 <h1 id="replicas">Replica's</h1>
 <p>Replica are the result of a replica job running or multiple times. It is a collection of a VM + snapshots</p>
 <div class="figure">
@@ -136,5 +207,18 @@ foreach ($storage in $storages) {
 </div>
 <pre class="powershell"><code>$job.Options.BackupStorageOptions.StgBlockSize | gm
 [Veeam.Backup.Common.EKbBlockSize] | gm -static -membertype property</code></pre>
+<h1 id="faq">FAQ</h1>
+<h2 id="audience-type">Audience Type</h2>
+<p>People who know ((Veeam -And Powershell) &amp;&amp; -Not Veeampssnapin) If you didn't get this one, first brush up your powershell skills</p>
+<h2 id="why-always-this-new-objects-in-array-style-table">Why always this new objects in array style ($table)</h2>
+<p>Cause I like this kind of setup. It allows you to export it easily to csv, html, etc</p>
+<h2 id="can-i-contribute-download-an-offline-version">Can I contribute | Download an offline version</h2>
+<p>Yes please! This file is written in markdown (pandoc style) and compiled with pandoc. It is hosted on <a href="https://github.com/tdewin/visualspaghetti" class="uri">https://github.com/tdewin/visualspaghetti</a></p>
+<p>Also you could download the project as a zip. I'll try to run the bat file before I sync, so that you get an exact result</p>
+<h2 id="some-of-these-cmdlets-dont-work">Some of these cmdlets don't work</h2>
+<p>Please open an issue on the <a href="https://github.com/tdewin/visualspaghetti" class="uri">https://github.com/tdewin/visualspaghetti</a></p>
+<h2 id="readme-looks-strange-on-github">Readme looks strange on github</h2>
+<p>Cause Github markdown uses a differnt dialect than pandoc, and it misses the stylesheet</p>
+<p>Go to <a href="http://dewin.me/visualspaghetti/" class="uri">http://dewin.me/visualspaghetti/</a> for a rendered version</p>
 </body>
 </html>
